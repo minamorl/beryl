@@ -90,14 +90,16 @@ class TaskBodyEffectTest < Minitest::Test
     assert_equal 'bad measure', result.error.message
   end
 
-  # 未知タグ (handler マップに対応が無い) も同じ扱いになる。この一貫性で
-  # よいかは spec の open_question task_body.unknown_tag が預かっている。
+  # 未知タグ (handler マップに対応が無い) も他の例外と同じ扱いになる
+  # (spec: berylx.task.body.unknown_tag = result_envelope)。失敗した Task 名が
+  # failed_node に残る点も同じ。
   def test_an_unhandled_tag_lands_in_the_result_envelope
     stray = Berylx::Task[:stray] { |_lay| Darkcore.op(:nobody_handles_this) }
     result = run_with(stray, { x: 1 }, Berylx::EffectTree.real_handlers)
 
     assert_instance_of Berylx::Err, result
     assert_equal :stray, result.error.failed_node
+    assert_instance_of KeyError, result.error.cause
   end
 
   # 短絡は変わらない: Err のあとの Task は body ごと発火しない。

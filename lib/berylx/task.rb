@@ -86,8 +86,7 @@ module Berylx
     # 畳みは意図的に上の rescue の内側に置く。Task の body が投げた例外は
     # 従来から結果封筒 Err になる (result.no_implicit_raise) ので、body が
     # 返した Effect を解釈する途中の例外 (未知タグの KeyError など) だけを
-    # 別扱いにする理由が無い。この一貫性でよいかは spec の
-    # open_question task_body.unknown_tag が人間ゲートに預けている。
+    # 別扱いにしない (spec: berylx.task.body.unknown_tag = result_envelope)。
     def fold_body(produced, handlers)
       return produced unless produced.is_a?(Darkcore::Effect)
 
