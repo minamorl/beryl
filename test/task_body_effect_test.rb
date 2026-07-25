@@ -25,13 +25,11 @@ class TaskBodyEffectTest < Minitest::Test
     end
   end
 
-  # real 圏の handler マップに作用の解釈を足したもの。合成子の handler は
-  # 既定のまま使う (aspect は差分だけ書けばよい)。
+  # 作用の解釈だけを足した圏。合成子の解釈は既定が降りてくる
+  # (aspect は差分だけ書けばよい)。圏が木の隅々まで届くことは
+  # category_propagation_test が別に縛る。
   def category(measure)
-    Berylx::EffectTree.real_handlers.merge(
-      Berylx::EffectTree::TASK => ->(payload) { Berylx::EffectTree.run_task(payload, category(measure)) },
-      MEASURE => measure
-    )
+    Berylx::EffectTree.category(MEASURE => measure)
   end
 
   def run_with(node, focus, handlers)

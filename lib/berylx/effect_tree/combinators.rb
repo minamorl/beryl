@@ -98,20 +98,30 @@ module Berylx
       result = run_subtree(node.body, focus, handlers)
       return result if result.is_a?(Ok)
 
-      recover(node.handler, result)
+      recover(node.handler, result, handlers)
     end
 
     # 回復 handler の適用 — Rescue と Sequence 内の Catch 境界で共有する
     # berylx 圏の algebra。RescueBlock (ブロック handler) はエラーと focus を
     # 受け取り、それ以外の node handler は focus を受け取って結果封筒を返す。
     # handler 自身が Err を返したら回復失敗として元エラーを metadata に畳む。
-    def recover(handler, error_result)
+    #
+    # handlers の既定は real 圏。C interpreter はここを 2 引数で呼ぶが、native
+    # gate は real 圏でしか立たないので既定で正しい。
+    def recover(handler, error_result, handlers = real_handlers)
       if handler.is_a?(RescueBlock)
         handler.call(error_result.focus, error_result)
       else
-        handler_result = handler.call(error_result.focus)
+        handler_result = recover_with_node(handler, error_result.focus, handlers)
         handler_result.is_a?(Err) ? rescue_failed(error_result, handler_result) : handler_result
       end
+    end
+
+    # 回復 handler が Task なら **いま効いている圏** で走らせる。body が Effect を
+    # 返しうるので、素の handler.call(focus) では body が圏の外へ出てしまう。
+    # Task 以外のノードは従来どおり自分の call に委ねる (意味を変えない)。
+    def recover_with_node(handler, focus, handlers)
+      handler.is_a?(Task) ? run_task([handler, focus], handlers) : handler.call(focus)
     end
 
     def rescue_failed(original_result, handler_result)

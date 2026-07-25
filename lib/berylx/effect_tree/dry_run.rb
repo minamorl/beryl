@@ -26,13 +26,16 @@ module Berylx
     # steps を共有した dry handler マップ。合成子 dry handler は副木の実行に
     # 同じ steps を共有する dry_handlers(steps) を使うので、再帰しても計画は
     # 1 本の steps に積み上がる (aspect は handler 差し替えだけで切り替わる)。
+    # category の上に dry の差分だけを載せる。dry では起きないはずのタグ
+    # (RECOVER など) も category から降りてくるので、抜け落ちて KeyError に
+    # ならない — aspect は「差分だけ書く」ままでいられる。
     def dry_handlers(steps)
-      {
+      category(
         TASK => ->(payload) { dry_task(payload, steps) },
         PARALLEL => ->(payload) { dry_parallel(payload[0], payload[1], steps) },
         BRANCH => ->(payload) { dry_branch(payload[0], payload[1], steps) },
         RESCUE => ->(payload) { dry_rescue(payload[0], payload[1], steps) }
-      }
+      )
     end
 
     def dry_task(payload, steps)

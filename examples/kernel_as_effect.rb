@@ -103,14 +103,12 @@ WORKFLOW =
 
 # ---------------------------------------------------------------------------
 # 3. 圏 — workflow は一行も書き換えない。handler マップだけを差し替える。
-#    合成子 (TASK/PARALLEL/BRANCH/RESCUE) の解釈は real のまま使い、差分だけ書く。
-#    TASK を run_task へ差し替えるのが要点: body が返した Effect を
-#    **このマップ自身**で畳むので、圏が body の内側まで届く。
+#    EffectTree.category は「自分自身を副木へ渡す」マップを組むので、圏は
+#    Task の body にも合成子 (parallel / rescue / catch) の内側にも届く。
+#    書くのは差分 (カーネル呼び出しをどう解釈するか) だけでよい。
 # ---------------------------------------------------------------------------
 def category(kernel_handler)
-  handlers = Berylx::EffectTree.real_handlers.merge(KERNEL => kernel_handler)
-  handlers[Berylx::EffectTree::TASK] = ->(payload) { Berylx::EffectTree.run_task(payload, handlers) }
-  handlers
+  Berylx::EffectTree.category(KERNEL => kernel_handler)
 end
 
 # native 圏: コンパイル済みカーネルを呼ぶ。

@@ -45,6 +45,10 @@ module Berylx
     PARALLEL = :berylx_parallel
     BRANCH   = :berylx_branch
     RESCUE   = :berylx_rescue
+    # Sequence 内の Catch 境界での回復も 1 つの tagged effect にする。
+    # 素の Ruby 呼び出しのままだと、回復 handler が Task のときにその body が
+    # **いま効いている圏の外**で走ってしまう (category.propagation 違反)。
+    RECOVER  = :berylx_recover
 
     # dry_run の戻り値: 最終結果 (実行しないので常に Ok) と、列挙された計画。
     DryRun = Data.define(:result, :steps)
@@ -116,10 +120,13 @@ module Berylx
       compile(step).call(prev.focus)
     end
 
+    # 回復そのものを effect ノードにする。ここで素の recover を呼ぶと、Sequence の
+    # 木を組む側には handler マップが無いので、回復 handler が Task のときその body が
+    # real 圏で走ってしまう (自作の圏が Catch 境界を越えられない)。
     def compile_catch(step, prev)
       return Darkcore.pure(prev) unless prev.is_a?(Err) && step.catches?(prev)
 
-      Darkcore.pure(recover(step.handler, prev))
+      Darkcore.op(RECOVER, [step.handler, prev])
     end
 
     # berylx ノードと初期 focus から darkcore Effect 木を組み立てる。
@@ -142,41 +149,50 @@ module Berylx
       Darkcore.fold(build(node, focus), on_return: ->(x) { x }, handlers: handlers)
     end
 
-    # 実実行の handler マップ: Task の block を実際に呼び、合成子ノードは
-    # それぞれ副木として実行しつつ berylx 圏の algebra で結果封筒を合成する。
-    # Task#call / 各合成子の call と同一のセマンティクスになるよう写している。
+    # ----------------------------------------------------------------
+    # category — handler マップ (圏) を組む唯一の口。
     #
-    # 合成子 handler は自分自身 (handlers) を副木実行に渡すため、木は
-    # 同じ圏 (real) のまま再帰する。dry-run 側も同じ再帰構造を持つので、
-    # aspect (real / dry) は handler マップの差し替えだけで切り替わる。
+    # 合成子は副木を **明示的に** 走らせるので、どのマップで走らせるかを
+    # 誰かが決めねばならない。ここを real 決め打ちにすると、選んだ圏が
+    # Parallel / Rescue / Branch を越えた瞬間 real へ戻る。実際そうなっていた:
     #
-    # lambda は不変なので一度だけ組んで凍結し、run / 副木実行の既定値として
-    # 共有する (native gate の「real 圏のままか」の同一性判定にも使う)。
-    REAL_HANDLERS = {
-      TASK => ->(payload) { real_task(payload) },
-      PARALLEL => ->(payload) { real_parallel(payload) },
-      BRANCH => ->(payload) { real_branch(payload) },
-      RESCUE => ->(payload) { real_rescue(payload) }
-    }.freeze
-
-    def real_handlers
-      REAL_HANDLERS
+    #   Task 単体          Ok
+    #   Sequence (>>)      Ok        <- 外側の fold が同じマップで畳むから通る
+    #   Parallel (&)       KeyError: no handler for effect: :measure
+    #   Rescue の handler  KeyError: no handler for effect: :measure
+    #
+    # だからマップは **自分自身を副木へ渡す** ように組む。合成子も Task body も
+    # このマップで走るので、圏は木の隅々まで届く
+    # (spec: berylx.category.propagation = through_combinators)。
+    #
+    #   handlers = Berylx::EffectTree.category(my_tag => ->(payload) { ... })
+    #   Berylx::EffectTree.run(workflow, focus, handlers: handlers)
+    #
+    # extra は最後に merge するので、合成子の解釈そのものも差し替えられる。
+    # ----------------------------------------------------------------
+    def category(extra = {})
+      handlers = {}
+      wire_defaults(handlers)
+      handlers.merge!(extra)
+      handlers
     end
 
-    def real_task(payload)
-      run_task(payload, real_handlers)
+    # 副木を **組み立て中のマップ自身** で走らせる配線。ここが要で、
+    # handlers を real_handlers に書き換えた瞬間に圏は合成子を越えられなくなる。
+    def wire_defaults(handlers)
+      handlers[TASK] = ->(payload) { run_task(payload, handlers) }
+      handlers[RECOVER] = ->(payload) { recover(payload[0], payload[1], handlers) }
+      { PARALLEL => :run_parallel, BRANCH => :run_branch, RESCUE => :run_rescue }.each do |tag, runner|
+        handlers[tag] = ->(payload) { send(runner, payload[0], payload[1], handlers) }
+      end
     end
 
     # ----------------------------------------------------------------
     # Task の body が Effect を返したときの畳み込み口。
     #
-    # **自作 handler マップから Task を走らせるときはこれを使う。** body が
-    # 返した Effect をそのマップ自身で畳むので、圏の選択が Task の粒度で
-    # 止まらず body の内側まで届く (spec: berylx.task.body.effect.category =
-    # same_handler_map、berylx.aspect.reach に task_body_effect を含む)。
-    #
-    # ここを real_handlers 決め打ちにすると、retry / audit / 検証用の圏を
-    # 選んでも body に入った瞬間 real へ戻ってしまい、この pin が意味を失う。
+    # body が返した Effect をそのマップ自身で畳むので、圏の選択が Task の
+    # 粒度で止まらず body の内側まで届く (spec: berylx.task.body.effect.category
+    # = same_handler_map、berylx.aspect.reach に task_body_effect を含む)。
     # ----------------------------------------------------------------
     def run_task(payload, handlers)
       task, focus = payload
@@ -187,16 +203,15 @@ module Berylx
       Darkcore.fold(effect, on_return: ->(x) { x }, handlers: handlers)
     end
 
-    def real_parallel(payload)
-      run_parallel(payload[0], payload[1], real_handlers)
-    end
+    # 実実行の圏。Task の block を実際に呼び、合成子ノードはそれぞれ副木として
+    # 実行しつつ berylx 圏の algebra で結果封筒を合成する。
+    #
+    # 一度だけ組んで凍結し、run / 副木実行の既定値として共有する
+    # (native gate の「real 圏のままか」の同一性判定にも使う)。
+    REAL_HANDLERS = category.freeze
 
-    def real_branch(payload)
-      run_branch(payload[0], payload[1], real_handlers)
-    end
-
-    def real_rescue(payload)
-      run_rescue(payload[0], payload[1], real_handlers)
+    def real_handlers
+      REAL_HANDLERS
     end
 
     # ----------------------------------------------------------------
