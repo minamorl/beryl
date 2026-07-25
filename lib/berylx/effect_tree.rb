@@ -196,7 +196,7 @@ module Berylx
     # ----------------------------------------------------------------
     def run_task(payload, handlers)
       task, focus = payload
-      task.call(focus) { |effect| fold_body(effect, handlers) }
+      task.call(focus, handlers)
     end
 
     def fold_body(effect, handlers)

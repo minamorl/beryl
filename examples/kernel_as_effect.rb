@@ -81,17 +81,26 @@ Validate = Berylx::Task[:validate] do |lay|
 end
 
 # body が Effect を返す。カーネルはここでは走らない — 走らせ方は圏が決める。
-Condition = Berylx::Task[:condition] do |lay|
-  count = lay[:count].get
-  conditioned = Moissanite::Buffer.f64(count)
-  run_kernel(CONDITION, conditioned, lay[:samples].get, count)
+#
+# pure: true は「この body は副作用を起こさず、作用は Effect を組んで返すだけ」
+# という **作者の宣言**。berylx はこれを推論しない (呼んでみるまで判らず、
+# 呼んだ時点で宣言の無い Task の副作用が発火してしまうので、「呼んで確かめる」
+# 形の推論は原理的に採れない)。宣言があると dry_run が body まで踏み込んで
+# 作用を列挙できる。
+#
+# dry_run は状態を進めないので、宣言する body は前段が置いた値に頼らない方が
+# よい (ここでは samples から数え直している)。
+Condition = Berylx::Task[:condition, pure: true] do |lay|
+  samples = lay[:samples].get
+  conditioned = Moissanite::Buffer.f64(samples.size)
+  run_kernel(CONDITION, conditioned, samples, samples.size)
     .bind { Darkcore.pure(lay[:conditioned].set(conditioned)) }
 end
 
-Measure = Berylx::Task[:measure] do |lay|
-  count = lay[:count].get
-  run_kernel(ENERGY, lay[:samples].get, count).bind do |energy|
-    Darkcore.pure(lay[:energy].set(energy)[:rms].set(Math.sqrt(energy / count)))
+Measure = Berylx::Task[:measure, pure: true] do |lay|
+  samples = lay[:samples].get
+  run_kernel(ENERGY, samples, samples.size).bind do |energy|
+    Darkcore.pure(lay[:energy].set(energy)[:rms].set(Math.sqrt(energy / samples.size)))
   end
 end
 
@@ -152,6 +161,20 @@ if $PROGRAM_NAME == __FILE__
   Berylx::EffectTree.run(WORKFLOW, start, handlers: category(audit(log)))
   puts '== 監査圏: ネイティブの一段まで木に出る ==================================='
   puts log.map { |line| "  #{line}" }
+  puts
+
+  # dry_run: 一切走らせずに計画を列挙する。**宣言された body の中の
+  # カーネル呼び出しまで計画に出る** — 0.9 の頃は Task 名しか出なかった所。
+  planned = []
+  plan = Berylx::EffectTree.dry_run(WORKFLOW, start, KERNEL => lambda { |(kernel, args)|
+    planned << "#{kernel.name} over #{args.grep(Moissanite::Buffer).map(&:size).max} elements"
+    kernel.return_type == :f64 ? 0.0 : 0
+  })
+  puts '== dry_run: 何も走らせずに計画を列挙する ================================='
+  puts "  tasks:   #{plan.steps.inspect}"
+  puts "  kernels: #{planned.inspect}"
+  puts '  (0.9 の頃は tasks の行しか出なかった。算術は不透明サンクの向こう側にあり、'
+  puts '   40 万要素の走査が計画に一行も現れなかった)'
   puts
 
   # 失敗はそのまま結果封筒に入る (合成子の handler は real のままなので、

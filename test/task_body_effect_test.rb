@@ -132,10 +132,12 @@ class TaskBodyEffectTest < Minitest::Test
     assert_equal pure.class, native.class
   end
 
-  # dry_run は副作用ゼロを保つため body を呼ばない。したがって body の
-  # Effect も列挙されない — これは仕様どおりで、列挙するには「この body は
-  # 純粋」を示す印が要る (spec: open_question task_body.dry_run_reach)。
-  def test_dry_run_still_does_not_fire_bodies
+  # ------------------------------------------------------------------
+  # 純粋性は **作者の宣言** でのみ成立する。berylx は推論しない
+  # (spec: berylx.task.body.purity = declared / forbid inferred)。
+  # 宣言が無ければ dry_run は body を呼ばない = 副作用ゼロを保つ。
+  # ------------------------------------------------------------------
+  def test_dry_run_does_not_fire_an_undeclared_body
     fired = []
     watcher = Berylx::Task[:watch] do |lay|
       fired << :body
@@ -144,6 +146,51 @@ class TaskBodyEffectTest < Minitest::Test
     plan = Berylx::EffectTree.dry_run(watcher, x: 1)
 
     assert_equal [:watch], plan.steps
-    assert_empty fired
+    assert_empty fired, '宣言の無い body は dry_run で呼ばれてはならない'
+  end
+
+  # 宣言された body だけ、dry_run が踏み込んで作用を列挙する
+  # (spec: berylx.dry_run.body_enumeration = declared_pure_only)。
+  def test_dry_run_enumerates_effects_of_a_declared_pure_body
+    declared = Berylx::Task[:declared, pure: true] do |lay|
+      Darkcore.op(MEASURE, lay[:x].get).bind { |v| Darkcore.pure(lay[:y].set(v)) }
+    end
+    seen = []
+    plan = Berylx::EffectTree.dry_run(declared, { x: 4 }, MEASURE => lambda { |arg|
+      seen << arg
+      0
+    })
+
+    assert_equal [:declared], plan.steps
+    assert_equal [4], seen, '宣言された body の作用は計画に現れる'
+  end
+
+  # dry_run は状態を進めない。宣言された body を組んでも focus は変わらない。
+  def test_dry_run_of_a_declared_body_does_not_advance_the_focus
+    declared = Berylx::Task[:declared, pure: true] do |lay|
+      Darkcore.op(MEASURE, lay[:x].get).bind { |v| Darkcore.pure(lay[:y].set(v)) }
+    end
+    plan = Berylx::EffectTree.dry_run(declared, { x: 4 }, MEASURE => ->(_) { 999 })
+
+    assert_nil plan.result.focus[:y].maybe
+  end
+
+  # 宣言は real 圏の振る舞いを変えない (宣言はあくまで dry 側への約束)。
+  def test_declaring_purity_does_not_change_the_real_run
+    declared = Berylx::Task[:declared, pure: true] do |lay|
+      Darkcore.op(MEASURE, lay[:x].get).bind { |v| Darkcore.pure(lay[:y].set(v)) }
+    end
+    plain = Berylx::Task[:plain] do |lay|
+      Darkcore.op(MEASURE, lay[:x].get).bind { |v| Darkcore.pure(lay[:y].set(v)) }
+    end
+    handlers = category(->(v) { v * 3 })
+
+    assert_equal run_with(plain, { x: 4 }, handlers).focus[:y].get,
+                 run_with(declared, { x: 4 }, handlers).focus[:y].get
+  end
+
+  def test_purity_defaults_to_undeclared
+    refute_predicate Berylx::Task[:anon] { |lay| lay }, :pure_body?
+    assert_predicate Berylx::Task[:anon, pure: true] { |lay| lay }, :pure_body?
   end
 end
