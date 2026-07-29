@@ -14,6 +14,7 @@ require_relative 'berylx/flow'
 require_relative 'berylx/state'
 require_relative 'berylx/merge'
 
+require_relative 'berylx/perform'
 require_relative 'berylx/task'
 require_relative 'berylx/sequence'
 require_relative 'berylx/parallel'

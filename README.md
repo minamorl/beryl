@@ -146,6 +146,40 @@ root.state
 Without the `Catch`, the result would be `Err` with `charged: true` in its partial lay, and
 `root.state` would remain `{ charged: false }`.
 
+## Tasks that perform effects
+
+A task body that takes a second argument receives a performer. `io.perform(tag, payload)` dispatches
+into the handler map the workflow is currently running under, so the body stays straight-line Ruby —
+no effect type, no `bind`:
+
+```ruby
+load_user = Berylx::Task[:load_user] do |lay, io|
+  lay[:user].set(io.perform(:db_query, lay[:id].get))
+end
+
+greet = Berylx::Task[:greet] do |lay|
+  lay[:greeting].set("hello #{lay[:user].get[:name]}")
+end
+
+workflow = load_user >> greet
+```
+
+Supply the vocabulary when you run it. The same workflow runs against a real database or against
+fixed values, and the workflow itself never changes:
+
+```ruby
+real = Berylx::EffectTree.real_handlers(db_query: ->(id) { DB.fetch_user(id) })
+Berylx::Root[id: 7].call(workflow, handlers: real)
+
+fixed = Berylx::EffectTree.real_handlers(db_query: ->(_id) { { name: 'mina' } })
+Berylx::Root[id: 7].call(workflow, handlers: fixed).focus.to_h[:greeting]
+# => "hello mina"   (no database, no mocks, deterministic)
+```
+
+An unhandled tag raises `KeyError` rather than returning `nil`, so "the effect never ran" is never
+confused with "the effect returned nothing". Effects performed from task bodies also pass through
+`around`, so an audit or timing aspect observes them.
+
 ## Documentation
 
 | Guide                                         | What it covers                                                                            |

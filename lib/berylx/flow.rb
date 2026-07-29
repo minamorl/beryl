@@ -15,8 +15,8 @@ module Berylx
     # 実行の唯一のエントリ。合成子でも単発 Task でも EffectTree (darkcore
     # Effect 木) を必ず通す。Task は葉として EffectTree の :berylx_task handler が
     # Task#call を呼ぶ。
-    def call(node)
-      EffectTree.run(node, @focus)
+    def call(node, handlers: EffectTree.real_handlers)
+      EffectTree.run(node, @focus, handlers: handlers)
     end
 
     def >>(other)

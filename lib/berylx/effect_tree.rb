@@ -50,6 +50,9 @@ module Berylx
     # (node, focus, handlers) の同じ形なので表で持つ。
     COMBINATOR_RUNNERS = { PARALLEL => :run_parallel, BRANCH => :run_branch, RESCUE => :run_rescue }.freeze
 
+    # berylx 自身が使うタグ。アプリの作用語彙がここを踏むのは事故なので弾く。
+    RESERVED_TAGS = [TASK, *COMBINATOR_RUNNERS.keys].freeze
+
     # dry_run の戻り値: 最終結果 (実行しないので常に Ok) と、列挙された計画。
     DryRun = Data.define(:result, :steps)
 
@@ -128,17 +131,26 @@ module Berylx
     # 同じ圏 (real) のまま再帰する。around が aspect を巻いたマップを subtree
     # に渡すことで、aspect は合成子の内側にも伝播する (dry_handlers が steps を
     # 伝播させるのと同じ構造)。
-    def real_handlers(subtree = nil)
-      handlers = { TASK => ->(payload) { real_task(payload) } }
+    # effects はアプリの作用語彙 ({ tag => ->(payload) {...} })。同じマップに
+    # 畳み込むので、Task 本体からの perform も合成子の副木も同じ圏で解釈される。
+    # subtree も位置引数にしてあるのは、キーワードを 1 つでも宣言すると
+    # real_handlers(db_query: ...) が「未知のキーワード」になってしまうため。
+    def real_handlers(effects = {}, subtree = nil)
+      collisions = effects.keys & RESERVED_TAGS
+      raise ArgumentError, "effect tags collide with berylx tags: #{collisions.inspect}" unless collisions.empty?
+
+      handlers = { TASK => ->(payload) { real_task(payload, subtree || handlers) } }
       COMBINATOR_RUNNERS.each do |tag, runner|
         handlers[tag] = ->(payload) { send(runner, payload[0], payload[1], subtree || handlers) }
       end
-      handlers
+      handlers.merge!(effects)
     end
 
-    def real_task(payload)
+    # Task 本体が作用を発行できるように、いま解釈に使っている handler マップを
+    # Perform として渡す。作用を出さない Task には渡さない (経路は従来のまま)。
+    def real_task(payload, handlers)
       task, focus = payload
-      task.call(focus)
+      task.call(focus, task.effectful? ? Perform.new(handlers) : nil)
     end
 
     # ----------------------------------------------------------------
@@ -158,11 +170,11 @@ module Berylx
     #   スレッドセーフにすること。
     # 注意 2: Rescue / Catch の回復 handler は Effect 木のノードではなく
     #   recover が木の外で直接適用するため aspect からは見えない (body まで)。
-    def around(&wrapper)
+    def around(effects = {}, &wrapper)
       raise ArgumentError, 'around requires a block' unless wrapper
 
       wrapped = {}
-      real_handlers(wrapped).each do |tag, handler|
+      real_handlers(effects, wrapped).each do |tag, handler|
         wrapped[tag] = ->(payload) { wrapper.call(tag, payload, handler) }
       end
       wrapped

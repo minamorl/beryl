@@ -18,8 +18,8 @@ module Berylx
       call(other)
     end
 
-    def call(node)
-      result = State.new(@value).call(node)
+    def call(node, handlers: EffectTree.real_handlers)
+      result = State.new(@value).call(node, handlers: handlers)
       commit_result(result)
     end
 

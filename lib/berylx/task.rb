@@ -19,12 +19,18 @@ module Berylx
       @block = block
     end
 
-    def call(focus)
+    def call(focus, performer = nil)
       root = Result.coerce_focus(focus)
-      result = Result.normalize(@block.call(root))
+      result = Result.normalize(invoke(root, performer))
       result.is_a?(Err) ? with_task_context(result) : result
     rescue StandardError => e
       Result.err(root || focus, e.class.name.to_sym, e.message, cause: e, failed_node: @name, trace: [@name])
+    end
+
+    # ブロックが 2 引数を取る Task は本体から作用を発行できる (第二引数に
+    # Berylx::Perform が渡る)。1 引数の Task は従来と全く同じ経路を通る。
+    def effectful?
+      @block.arity.abs >= 2
     end
 
     def >>(other)
@@ -52,6 +58,16 @@ module Berylx
     end
 
     private
+
+    def invoke(root, performer)
+      return @block.call(root) unless effectful?
+      unless performer
+        raise ArgumentError,
+              "task #{@name} performs effects; run it through a handler map (EffectTree.run / Flow#call)"
+      end
+
+      @block.call(root, performer)
+    end
 
     def with_task_context(result)
       error = result.error.failed_node ? result.error : result.error.prepend_trace(@name)

@@ -34,6 +34,40 @@ Or evaluate it from a standalone lay:
 result = workflow.call(Berylx::Lay[account_id: 42])
 ```
 
+## Tasks that perform effects
+
+`load_account` above reaches straight for `Account.find`, so the task can only ever run against a
+real database. Give the block a second parameter and it receives a performer instead:
+
+```ruby
+load_account = Berylx::Task[:load_account] do |lay, io|
+  lay[:account].set(io.perform(:find_account, lay[:account_id].get))
+end
+```
+
+`io.perform(tag, payload)` dispatches into the handler map the workflow is currently running under.
+The body stays straight-line Ruby — a tag and plain data, never an effect value and never `bind`.
+
+Supply the vocabulary when you run the workflow:
+
+```ruby
+real = Berylx::EffectTree.real_handlers(find_account: ->(id) { Account.find(id) })
+root.call(workflow, handlers: real)
+
+fixed = Berylx::EffectTree.real_handlers(find_account: ->(_id) { Account.new(name: 'mina') })
+root.call(workflow, handlers: fixed)
+```
+
+The workflow is identical in both runs; only the map changed. The second run touches no database and
+needs no mocks.
+
+An unhandled tag raises `KeyError` rather than returning `nil`, so "the effect never ran" is never
+confused with "the effect returned nothing". Effect tags may not collide with berylx's own tags, and
+effects performed from task bodies pass through `EffectTree.around`, so an audit or timing aspect
+observes them alongside the tasks themselves.
+
+One-argument task bodies are unaffected and keep taking the existing path.
+
 ## Branching
 
 Use `When` and `Else` for predicate-based choice:
