@@ -63,6 +63,31 @@ Because execution is just an effect tree interpreted by a handler map, cross-cut
 dry-run, audit) are added by **swapping the handler map** — the workflow itself is never rewritten.
 `darkcore` is a required runtime dependency.
 
+Build an aspect with `Berylx::EffectTree.around`, which wraps the real interpreter and passes the
+wrapped map down into subtrees, so the aspect also applies inside `parallel`, `branch`, and
+`rescue`:
+
+```ruby
+timings = Queue.new # parallel branches run on their own threads
+
+handlers = Berylx::EffectTree.around do |tag, payload, inner|
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  result = inner.call(payload)
+  elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+  timings << [payload.first.name, elapsed] if tag == Berylx::EffectTree::TASK
+  result
+end
+
+Berylx::EffectTree.run(workflow, Berylx::Lay[], handlers: handlers)
+```
+
+The payload is inspectable data: `[node, focus]`. Only the `TASK` tag carries a named task — the
+combinator tags carry the `Parallel` / `Branch` / `Rescue` node itself.
+
+Wrapping `real_handlers` by hand does not propagate — the subtrees still run on the unwrapped map —
+so build aspects through `around`. Recovery handlers (`rescue_with`, `Catch`) are applied outside
+the effect tree, so an aspect observes the body of a rescue but not its recovery.
+
 ## Quick start
 
 Define named state transitions, compose them first, then run the complete workflow from the root:
@@ -120,6 +145,40 @@ root.state
 
 Without the `Catch`, the result would be `Err` with `charged: true` in its partial lay, and
 `root.state` would remain `{ charged: false }`.
+
+## Tasks that perform effects
+
+A task body that takes a second argument receives a performer. `io.perform(tag, payload)` dispatches
+into the handler map the workflow is currently running under, so the body stays straight-line Ruby —
+no effect type, no `bind`:
+
+```ruby
+load_user = Berylx::Task[:load_user] do |lay, io|
+  lay[:user].set(io.perform(:db_query, lay[:id].get))
+end
+
+greet = Berylx::Task[:greet] do |lay|
+  lay[:greeting].set("hello #{lay[:user].get[:name]}")
+end
+
+workflow = load_user >> greet
+```
+
+Supply the vocabulary when you run it. The same workflow runs against a real database or against
+fixed values, and the workflow itself never changes:
+
+```ruby
+real = Berylx::EffectTree.real_handlers(db_query: ->(id) { DB.fetch_user(id) })
+Berylx::Root[id: 7].call(workflow, handlers: real)
+
+fixed = Berylx::EffectTree.real_handlers(db_query: ->(_id) { { name: 'mina' } })
+Berylx::Root[id: 7].call(workflow, handlers: fixed).focus.to_h[:greeting]
+# => "hello mina"   (no database, no mocks, deterministic)
+```
+
+An unhandled tag raises `KeyError` rather than returning `nil`, so "the effect never ran" is never
+confused with "the effect returned nothing". Effects performed from task bodies also pass through
+`around`, so an audit or timing aspect observes them.
 
 ## Documentation
 

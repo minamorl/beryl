@@ -22,11 +22,11 @@ module Berylx
       self.class.new(@lay, @node ? (@node & next_node) : next_node)
     end
 
-    def call(node = nil)
+    def call(node = nil, handlers: EffectTree.real_handlers)
       target = node ? coerce_node(node) : @node
       raise ArgumentError, 'State has no task to run' unless target
 
-      Flow[@lay].call(target)
+      Flow[@lay].call(target, handlers: handlers)
     end
 
     def to_lay

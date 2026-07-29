@@ -13,7 +13,10 @@ darkcore is a required runtime dependency; `Berylx::EffectTree` is the one and o
 - Keep public syntax small: `Task[...]`, `Workflow[...]`, `>>`, `&`, branch/rescue helpers.
 - Do not expose `Effect`, `reads`, `writes`, `requires`, or `returns` DSLs in the **surface** API.
   The darkcore Effect tree is an internal substrate, not something users write against directly.
-- Task bodies receive a focus object and access state inside the block.
+- Task bodies receive a focus object and access state inside the block. A two-argument block also
+  receives a `Berylx::Perform`, so a task can request an effect with `io.perform(tag, payload)` — a
+  tag and plain data. That is the line: effects may be **requested** from the surface, never
+  **constructed** there. No `Effect` value and no `bind` in user code.
 - All combinators (Sequence / Parallel / Branch / Rescue) execute via `Berylx::EffectTree.run`. Do
   not reintroduce a second, native execution path alongside the Effect tree.
 - Prefer real Ruby code over pseudo-code.
