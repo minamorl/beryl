@@ -63,6 +63,31 @@ Because execution is just an effect tree interpreted by a handler map, cross-cut
 dry-run, audit) are added by **swapping the handler map** — the workflow itself is never rewritten.
 `darkcore` is a required runtime dependency.
 
+Build an aspect with `Berylx::EffectTree.around`, which wraps the real interpreter and passes the
+wrapped map down into subtrees, so the aspect also applies inside `parallel`, `branch`, and
+`rescue`:
+
+```ruby
+timings = Queue.new # parallel branches run on their own threads
+
+handlers = Berylx::EffectTree.around do |tag, payload, inner|
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  result = inner.call(payload)
+  elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+  timings << [payload.first.name, elapsed] if tag == Berylx::EffectTree::TASK
+  result
+end
+
+Berylx::EffectTree.run(workflow, Berylx::Lay[], handlers: handlers)
+```
+
+The payload is inspectable data: `[node, focus]`. Only the `TASK` tag carries a named task — the
+combinator tags carry the `Parallel` / `Branch` / `Rescue` node itself.
+
+Wrapping `real_handlers` by hand does not propagate — the subtrees still run on the unwrapped map —
+so build aspects through `around`. Recovery handlers (`rescue_with`, `Catch`) are applied outside
+the effect tree, so an aspect observes the body of a rescue but not its recovery.
+
 ## Quick start
 
 Define named state transitions, compose them first, then run the complete workflow from the root:

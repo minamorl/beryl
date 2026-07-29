@@ -46,6 +46,10 @@ module Berylx
     BRANCH   = :berylx_branch
     RESCUE   = :berylx_rescue
 
+    # 合成子タグ → 副木を走らせる interpreter。3 つとも
+    # (node, focus, handlers) の同じ形なので表で持つ。
+    COMBINATOR_RUNNERS = { PARALLEL => :run_parallel, BRANCH => :run_branch, RESCUE => :run_rescue }.freeze
+
     # dry_run の戻り値: 最終結果 (実行しないので常に Ok) と、列挙された計画。
     DryRun = Data.define(:result, :steps)
 
@@ -119,16 +123,17 @@ module Berylx
     # それぞれ副木として実行しつつ berylx 圏の algebra で結果封筒を合成する。
     # Task#call / 各合成子の call と同一のセマンティクスになるよう写している。
     #
-    # 合成子 handler は自分自身 (handlers) を副木実行に渡すため、木は
-    # 同じ圏 (real) のまま再帰する。dry-run 側も同じ再帰構造を持つので、
-    # aspect (real / dry) は handler マップの差し替えだけで切り替わる。
-    def real_handlers
-      {
-        TASK => ->(payload) { real_task(payload) },
-        PARALLEL => ->(payload) { real_parallel(payload) },
-        BRANCH => ->(payload) { real_branch(payload) },
-        RESCUE => ->(payload) { real_rescue(payload) }
-      }
+    # 合成子 handler が副木の実行に使うマップは subtree で与える。既定 (nil)
+    # は「いま組み立てているこのマップ自身」なので、単体で呼べば従来どおり
+    # 同じ圏 (real) のまま再帰する。around が aspect を巻いたマップを subtree
+    # に渡すことで、aspect は合成子の内側にも伝播する (dry_handlers が steps を
+    # 伝播させるのと同じ構造)。
+    def real_handlers(subtree = nil)
+      handlers = { TASK => ->(payload) { real_task(payload) } }
+      COMBINATOR_RUNNERS.each do |tag, runner|
+        handlers[tag] = ->(payload) { send(runner, payload[0], payload[1], subtree || handlers) }
+      end
+      handlers
     end
 
     def real_task(payload)
@@ -136,16 +141,31 @@ module Berylx
       task.call(focus)
     end
 
-    def real_parallel(payload)
-      run_parallel(payload[0], payload[1], real_handlers)
-    end
+    # ----------------------------------------------------------------
+    # around — real interpreter に aspect (audit / retry / 計測) を巻いた
+    # handler マップを作る。workflow 本体 (Effect 木) は書き換えない。
+    # (spec: substrate.aspect_via_handler)
+    #
+    #   handlers = EffectTree.around { |tag, payload, inner| ...; inner.call(payload) }
+    #   EffectTree.run(workflow, focus, handlers: handlers)
+    #
+    # 巻いたマップ自身を副木実行にも渡すので、aspect は parallel / branch /
+    # rescue の内側にも届く。real_handlers を手で transform_values しても
+    # 内側には届かない (副木が生のマップで走ってしまう) ので、aspect を
+    # 組み立てる道はここに一本化する。
+    #
+    # 注意 1: parallel の branch は別スレッドで走る。wrapper が状態を持つなら
+    #   スレッドセーフにすること。
+    # 注意 2: Rescue / Catch の回復 handler は Effect 木のノードではなく
+    #   recover が木の外で直接適用するため aspect からは見えない (body まで)。
+    def around(&wrapper)
+      raise ArgumentError, 'around requires a block' unless wrapper
 
-    def real_branch(payload)
-      run_branch(payload[0], payload[1], real_handlers)
-    end
-
-    def real_rescue(payload)
-      run_rescue(payload[0], payload[1], real_handlers)
+      wrapped = {}
+      real_handlers(wrapped).each do |tag, handler|
+        wrapped[tag] = ->(payload) { wrapper.call(tag, payload, handler) }
+      end
+      wrapped
     end
 
     # ----------------------------------------------------------------
