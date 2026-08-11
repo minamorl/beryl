@@ -10,8 +10,10 @@ module Berylx
 
     attr_reader :value, :path
 
+    # 格納する値は深く凍結する (Berylx::Freeze の不変条件)。未凍結の入力は
+    # 複製してから凍結するので、呼び出し側のデータはそのまま可変で残る。
     def initialize(value = {}, path = [])
-      @value = value
+      @value = Freeze.deep(value)
       @path = path.freeze
     end
 

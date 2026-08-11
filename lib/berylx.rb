@@ -7,6 +7,7 @@ require 'darkcore'
 
 require_relative 'berylx/version'
 require_relative 'berylx/error'
+require_relative 'berylx/freeze'
 require_relative 'berylx/result'
 require_relative 'berylx/focus'
 require_relative 'berylx/root'
