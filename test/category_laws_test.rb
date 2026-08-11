@@ -179,13 +179,13 @@ class CategoryLawsTest < Minitest::Test
     assert_equal %i[sign], audit_names(branch, Berylx::Lay[n: 1])
   end
 
-  # Rescue は body だけが Effect 木のノードで、回復 handler は
-  # EffectTree.recover が木の外で直接適用する (Sequence の Catch も同じ)。
-  # aspect から見えるのは body まで、という境界をここで固定する。
-  def test_aspect_reaches_inside_rescue_body
+  # 回復は RECOVER effect として handler マップの中で適用されるので、
+  # aspect は rescue の body だけでなく回復 handler の実行にも届く
+  # (詳細な pin は test/recovery_effect_test.rb)。
+  def test_aspect_reaches_recovery_inside_rescue
     workflow = reject(:boom, :kaboom).rescue_with(set(:c, 3))
 
-    assert_equal %i[boom], audit_names(workflow)
+    assert_equal %i[boom c], audit_names(workflow)
   end
 
   # ================================================================
@@ -245,5 +245,60 @@ class CategoryLawsTest < Minitest::Test
 
     assert_equal :f, execute(f & g).failed_node
     assert_equal :g, execute(g & f).failed_node
+  end
+
+  # ================================================================
+  # 6. Kleisli 法則 — Task.identity と >> を生成した鎖の上で縛る。
+  #    生成器は成功 (set / inc)・失敗 (reject)・履歴依存 (Catch) を混ぜる。
+  #    Catch を含んでも >> の結合律が崩れないのは Sequence が入れ子を
+  #    flat_map で潰すから — どの結合順も同じ steps 列に正規化される。
+  # ================================================================
+
+  CHAIN_CASES = 40
+
+  def gen_node(rng, index)
+    case rng.rand(6)
+    when 0 then set(:"k#{rng.rand(3)}", rng.rand(100), name: :"set#{index}")
+    when 1 then Berylx::Task[:"inc#{index}"] { |lay| lay[:count].update { |count| count + 1 } }
+    when 2 then reject(:"boom#{index}", :boom)
+    when 3 then Berylx::Task.identity
+    when 4 then Berylx::Catch[:"catch#{index}"] { |_error, lay| lay[:rescued].set(true) }
+    else        set(:count, rng.rand(10), name: :"reset#{index}")
+    end
+  end
+
+  def each_generated_chain(size)
+    CHAIN_CASES.times do |seed|
+      rng = Random.new(seed)
+      yield Array.new(size) { |index| gen_node(rng, index) }
+    end
+  end
+
+  def test_task_identity_returns_ok_of_the_input_lay
+    result = execute(Berylx::Task.identity, Berylx::Lay[a: 1])
+
+    assert_instance_of Berylx::Ok, result
+    assert_equal({ a: 1 }, result.focus.to_h)
+  end
+
+  def test_task_identity_is_a_left_and_right_unit_over_generated_chains
+    each_generated_chain(2) do |nodes|
+      chain = nodes.reduce(:>>)
+      expected = execute(chain, Berylx::Lay[count: 0])
+
+      assert_same_envelope expected, execute(Berylx::Task.identity >> chain, Berylx::Lay[count: 0])
+      assert_same_envelope expected, execute(chain >> Berylx::Task.identity, Berylx::Lay[count: 0])
+    end
+  end
+
+  def test_sequence_is_associative_over_generated_chains
+    each_generated_chain(3) do |(first, second, third)|
+      left = (first >> second) >> third
+      right = first >> (second >> third)
+
+      assert_equal left.steps, right.steps
+      assert_same_envelope execute(left, Berylx::Lay[count: 0]),
+                           execute(right, Berylx::Lay[count: 0])
+    end
   end
 end

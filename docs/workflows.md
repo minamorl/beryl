@@ -117,6 +117,54 @@ Parallel branches never mutate a shared lay. Choose the merge policy explicitly:
 | `Berylx::Merge.deep`       | Deep-merge hashes; the right value wins scalar conflicts                     |
 | `Berylx::Merge.strict`     | Merge independent changes and return `:merge_conflict` for conflicting paths |
 
+### Reducer determinism
+
+The reducer folds branch results in **branch definition order, never completion order**. Each branch
+runs on its own thread, but the interpreter joins the threads in the order the branches were
+declared and reduces in that same order, so a parallel group is deterministic even when branch
+timings vary (pinned in `test/parallel_determinism_test.rb`).
+
+That determinism is what makes the merge policies meaningful:
+
+- `Merge.deep` is **right-biased and non-commutative** — on a scalar conflict the later-declared
+  branch wins, deterministically. `left & right` and `right & left` are different workflows.
+- `Merge.strict` diffs both sides against the **common parent snapshot** (the lay the parallel group
+  started from), not mere key presence. A key initialized to `nil` in the parent and moved to two
+  different values by two branches is a `:merge_conflict`; a branch that leaves it at the parent
+  value does not conflict with one that changes it.
+
+### Thread-safety of handlers and aspects
+
+Parallel branches run on separate threads, and every branch dispatches through the **same handler
+map**. Handler lambdas, `around` wrappers, and anything they close over must therefore be
+thread-safe. The norm for collecting observations from an aspect is a `Thread::Queue`:
+
+```ruby
+timings = Thread::Queue.new # safe: Queue is thread-safe
+
+handlers = Berylx::EffectTree.around do |tag, payload, inner|
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  result = inner.call(payload)
+  timings << [tag, Process.clock_gettime(Process::CLOCK_MONOTONIC) - started]
+  result
+end
+```
+
+A plain shared `Array` is **not safe** — two branches appending concurrently can lose or interleave
+writes:
+
+```ruby
+timings = [] # unsafe: Array#<< is not atomic across threads
+handlers = Berylx::EffectTree.around do |tag, payload, inner|
+  result = inner.call(payload)
+  timings << [tag] # racy under parallel branches
+  result
+end
+```
+
+The same rule applies to effect handlers themselves (`db_query: ->(payload) { ... }`): if two
+parallel branches can perform the same effect, the handler body must tolerate concurrent calls.
+
 ```ruby
 left = Berylx::Task[:left] { |lay| lay[:status].set(:paid) }
 right = Berylx::Task[:right] { |lay| lay[:status].set(:trial) }
@@ -179,7 +227,7 @@ instrumentation without a second declarative DSL.
 | Receiver | `left \| right` | Meaning                                                                  |
 | -------- | --------------- | ------------------------------------------------------------------------ |
 | `Root`   | `root \| flow`  | Run `flow` from committed state and commit the result back into the root |
-| `State`  | `state \| flow` | Run `flow` from a standalone state (raw blocks are coerced into tasks)   |
+| `State`  | `state \| flow` | Run `flow` from a standalone state (`flow` must be a task/workflow node) |
 | `Ok`     | `ok \| node`    | Bind: pass the focus into `node.call` and continue                       |
 | `Err`    | `err \| node`   | Short-circuit: return the `Err` unchanged and ignore `node`              |
 | `Task`   | `task \| other` | Sequence, identical to `task >> other`                                   |
@@ -200,6 +248,30 @@ scoped =
     .rescue_with(:refund) { |error, lay| compensate(error, lay) } >>
   notify
 ```
+
+### The exact scoping rule for `Catch`
+
+A `Catch` is history-dependent: it is not a standalone step but a boundary whose meaning depends on
+what reached it.
+
+- It applies to **the nearest preceding failure within the same flattened sequence** — whatever
+  `Err` arrives at its position, produced by any earlier step that no earlier boundary already
+  recovered.
+- When the incoming result is `Ok`, the `Catch` is skipped entirely.
+- A fatal error skips the `Catch` unless it was built with `fatal: true` (see
+  [Errors and recovery](error-handling.md#fatal-errors)).
+- Standing alone (`catch.call(lay)`), a `Catch` is the identity — there is no preceding failure, so
+  it passes the lay through as `Ok`.
+
+Because `>>` flattens nested sequences into one step list, grouping does not change which failures
+reach a `Catch`: `(a >> catch) >> b` and `a >> (catch >> b)` normalize to the same steps, so `>>`
+stays associative even with `Catch` in the chain (pinned in `test/category_laws_test.rb`). What
+changes scope is `rescue_with`, which binds recovery to an explicit body: only failures raised
+inside that body reach its handler.
+
+Recovery itself runs inside the effect tree: when a body fails, a `RECOVER` effect dispatches
+through the current handler map, so aspects observe it and recovery bodies can perform effects. See
+[Errors and recovery](error-handling.md#recovery-runs-in-the-effect-tree).
 
 Read [Errors and recovery](error-handling.md) for propagation, partial state, fatal errors, and
 handler behavior.

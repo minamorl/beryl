@@ -10,13 +10,20 @@ module Berylx
 
     attr_reader :value, :path
 
+    # 格納する値は深く凍結する (Berylx::Freeze の不変条件)。未凍結の入力は
+    # 複製してから凍結するので、呼び出し側のデータはそのまま可変で残る。
     def initialize(value = {}, path = [])
-      @value = value
+      @value = Freeze.deep(value)
       @path = path.freeze
     end
 
+    # 焦点の移動は凍結済みの @value をそのまま共有する。new を通すと
+    # Freeze.deep が木全体を再走査してしまうので、path だけ差し替える —
+    # 移動のコストは path 長に比例し、状態の大きさに比例しない。
     def [](key)
-      self.class.new(@value, @path + [key])
+      child = dup
+      child.refocus!(@path + [key])
+      child
     end
 
     def get(default: MISSING)
@@ -71,6 +78,12 @@ module Berylx
 
     def inspect
       "#<Berylx::Focus path=#{@path.inspect} value=#{get.inspect}>"
+    end
+
+    protected
+
+    def refocus!(path)
+      @path = path.freeze
     end
 
     private

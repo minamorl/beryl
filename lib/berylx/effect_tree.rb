@@ -23,7 +23,8 @@ module Berylx
   #   - substrate.branch.mapped    : branch を Effect(:berylx_branch, [node, focus])
   #       へ写す。arm の選択は handler の分岐でなく effect 木の tag で表す。
   #   - substrate.rescue.mapped    : rescue を Effect(:berylx_rescue, [node, focus])
-  #       へ写す。body の Err は handler 差し替え (回復 handler) で回復させる。
+  #       へ写す。body の Err は Effect(:berylx_recover, [node, err]) として
+  #       発行され、回復の適用も handler マップの中で起きる (木の外ではない)。
   #   - result.parallel_default    : short_circuit が既定、accumulate はタグ上書き。
   #   - substrate.no_opaque_thunk  : payload は検査可能なデータ (berylx ノード + Focus)。
   #       Task の block や branch/reducer は handler が呼ぶまで実行しない。
@@ -45,13 +46,18 @@ module Berylx
     PARALLEL = :berylx_parallel
     BRANCH   = :berylx_branch
     RESCUE   = :berylx_rescue
+    # 回復そのものも effect。Rescue の body が Err を返したとき、また Sequence
+    # 内の Catch が Err を受け止めたとき、[node, error_result] を payload に
+    # この tag が発行される。回復 handler の適用は木の外ではなく handler
+    # マップの中で起きるので、around aspect は回復も観測できる。
+    RECOVER  = :berylx_recover
 
     # 合成子タグ → 副木を走らせる interpreter。3 つとも
     # (node, focus, handlers) の同じ形なので表で持つ。
     COMBINATOR_RUNNERS = { PARALLEL => :run_parallel, BRANCH => :run_branch, RESCUE => :run_rescue }.freeze
 
     # berylx 自身が使うタグ。アプリの作用語彙がここを踏むのは事故なので弾く。
-    RESERVED_TAGS = [TASK, *COMBINATOR_RUNNERS.keys].freeze
+    RESERVED_TAGS = [TASK, RECOVER, *COMBINATOR_RUNNERS.keys].freeze
 
     # dry_run の戻り値: 最終結果 (実行しないので常に Ok) と、列挙された計画。
     DryRun = Data.define(:result, :steps)
@@ -103,10 +109,13 @@ module Berylx
       compile(step).call(prev.focus)
     end
 
+    # Catch が Err を受け止めるときは RECOVER effect を発行する。回復の適用は
+    # handler マップの仕事になり、aspect からも見える。fatal の門番
+    # (catches?) は effect を発行するかどうかの判定なので、ここに残る。
     def compile_catch(step, prev)
       return Darkcore.pure(prev) unless prev.is_a?(Err) && step.catches?(prev)
 
-      Darkcore.pure(recover(step.handler, prev))
+      Darkcore.op(RECOVER, [step, prev])
     end
 
     # berylx ノードと初期 focus から darkcore Effect 木を組み立てる。
@@ -139,11 +148,20 @@ module Berylx
       collisions = effects.keys & RESERVED_TAGS
       raise ArgumentError, "effect tags collide with berylx tags: #{collisions.inspect}" unless collisions.empty?
 
-      handlers = { TASK => ->(payload) { real_task(payload, subtree || handlers) } }
+      handlers = {}
+      install_reserved_handlers(handlers, subtree)
+      handlers.merge!(effects)
+    end
+
+    # berylx の予約タグ (TASK / 合成子 / RECOVER) の real interpreter を
+    # マップへ組み付ける。副木の実行には subtree (aspect が巻いたマップ) か、
+    # 無ければ組み立て中のマップ自身を使う。
+    def install_reserved_handlers(handlers, subtree)
+      handlers[TASK] = ->(payload) { real_task(payload, subtree || handlers) }
       COMBINATOR_RUNNERS.each do |tag, runner|
         handlers[tag] = ->(payload) { send(runner, payload[0], payload[1], subtree || handlers) }
       end
-      handlers.merge!(effects)
+      handlers[RECOVER] = ->(payload) { real_recover(payload[0], payload[1], subtree || handlers) }
     end
 
     # Task 本体が作用を発行できるように、いま解釈に使っている handler マップを
@@ -166,10 +184,10 @@ module Berylx
     # 内側には届かない (副木が生のマップで走ってしまう) ので、aspect を
     # 組み立てる道はここに一本化する。
     #
-    # 注意 1: parallel の branch は別スレッドで走る。wrapper が状態を持つなら
-    #   スレッドセーフにすること。
-    # 注意 2: Rescue / Catch の回復 handler は Effect 木のノードではなく
-    #   recover が木の外で直接適用するため aspect からは見えない (body まで)。
+    # 注意: parallel の branch は別スレッドで走る。wrapper が状態を持つなら
+    #   スレッドセーフにすること。回復も RECOVER effect として同じマップを
+    #   通るので、aspect は rescue の body・回復 handler・回復内の作用まで
+    #   すべて観測できる。
     def around(effects = {}, &wrapper)
       raise ArgumentError, 'around requires a block' unless wrapper
 

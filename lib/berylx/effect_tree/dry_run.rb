@@ -31,7 +31,10 @@ module Berylx
         TASK => ->(payload) { dry_task(payload, steps) },
         PARALLEL => ->(payload) { dry_parallel(payload[0], payload[1], steps) },
         BRANCH => ->(payload) { dry_branch(payload[0], payload[1], steps) },
-        RESCUE => ->(payload) { dry_rescue(payload[0], payload[1], steps) }
+        RESCUE => ->(payload) { dry_rescue(payload[0], payload[1], steps) },
+        # dry では body が常に Ok なので RECOVER は発火しない。マップの
+        # 全域性 (berylx の予約タグを全部持つ) のために置く。
+        RECOVER => ->(payload) { Result.ok(payload[1].focus) }
       }
     end
 
