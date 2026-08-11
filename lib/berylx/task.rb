@@ -10,6 +10,12 @@ module Berylx
       self[name, &block]
     end
 
+    # 恒等射 — 受け取った lay をそのまま Ok(lay) で返す。>> の左右単位元
+    # (test/category_laws_test.rb の Kleisli 法則が縛る)。
+    def self.identity
+      @identity ||= new(:identity) { |lay| lay }
+    end
+
     attr_reader :name
 
     def initialize(name, &block)

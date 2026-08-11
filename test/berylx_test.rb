@@ -254,6 +254,21 @@ class BerylxTest < Minitest::Test
     assert_equal({ charged: true }, result.focus.to_h)
   end
 
+  # raise 時の partial lay は「task 入口の lay」。raise の前に作った lay は
+  # ローカル値のまま失われる (set は新しい lay を返すだけで、封筒に載るのは
+  # task が返した lay か、raise 時は入口の lay だけ)。
+  def test_task_exception_keeps_the_lay_at_task_entry_not_intra_task_sets
+    explode = Berylx::Task[:explode] do |root|
+      root[:progress].set(:half_done)
+      raise 'lost'
+    end
+
+    result = Berylx::Flow[Berylx::Lay[base: 1]].call(explode)
+
+    assert_instance_of Berylx::Err, result
+    assert_equal({ base: 1 }, result.focus.to_h)
+  end
+
   def test_lay_reject_returns_defined_error
     reject = Berylx::Task[:reject_duplicate] do |root|
       root[:checked].set(true).reject(:duplicate_subscription, 'already subscribed')

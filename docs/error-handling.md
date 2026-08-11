@@ -53,7 +53,11 @@ result = lay[:account_id].required(:missing_account_id)
 
 ## Raised exceptions
 
-A task catches `StandardError` and converts it into an `Err` while keeping the lay it received:
+A task catches `StandardError` and converts it into an `Err` while keeping the lay it received.
+Precisely: on a raised exception the partial lay is the lay **at task entry**. Lays built inside the
+task before the `raise` are ordinary local values — `set` returns a new lay, it does not advance
+any shared state — so they are lost with the stack. If progress must survive a failure, return it
+as part of an `Err` via `reject` instead of raising:
 
 ```ruby
 explode = Berylx::Task[:explode] do |_lay|

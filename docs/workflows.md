@@ -201,5 +201,25 @@ scoped =
   notify
 ```
 
+### The exact scoping rule for `Catch`
+
+A `Catch` is history-dependent: it is not a standalone step but a boundary whose meaning depends on
+what reached it.
+
+- It applies to **the nearest preceding failure within the same flattened sequence** — whatever
+  `Err` arrives at its position, produced by any earlier step that no earlier boundary already
+  recovered.
+- When the incoming result is `Ok`, the `Catch` is skipped entirely.
+- A fatal error skips the `Catch` unless it was built with `fatal: true`
+  (see [Errors and recovery](error-handling.md#fatal-errors)).
+- Standing alone (`catch.call(lay)`), a `Catch` is the identity — there is no preceding failure, so
+  it passes the lay through as `Ok`.
+
+Because `>>` flattens nested sequences into one step list, grouping does not change which failures
+reach a `Catch`: `(a >> catch) >> b` and `a >> (catch >> b)` normalize to the same steps, so `>>`
+stays associative even with `Catch` in the chain (pinned in `test/category_laws_test.rb`). What
+changes scope is `rescue_with`, which binds recovery to an explicit body: only failures raised
+inside that body reach its handler.
+
 Read [Errors and recovery](error-handling.md) for propagation, partial state, fatal errors, and
 handler behavior.
