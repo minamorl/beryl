@@ -117,6 +117,54 @@ Parallel branches never mutate a shared lay. Choose the merge policy explicitly:
 | `Berylx::Merge.deep`       | Deep-merge hashes; the right value wins scalar conflicts                     |
 | `Berylx::Merge.strict`     | Merge independent changes and return `:merge_conflict` for conflicting paths |
 
+### Reducer determinism
+
+The reducer folds branch results in **branch definition order, never completion order**. Each branch
+runs on its own thread, but the interpreter joins the threads in the order the branches were
+declared and reduces in that same order, so a parallel group is deterministic even when branch
+timings vary (pinned in `test/parallel_determinism_test.rb`).
+
+That determinism is what makes the merge policies meaningful:
+
+- `Merge.deep` is **right-biased and non-commutative** — on a scalar conflict the later-declared
+  branch wins, deterministically. `left & right` and `right & left` are different workflows.
+- `Merge.strict` diffs both sides against the **common parent snapshot** (the lay the parallel
+  group started from), not mere key presence. A key initialized to `nil` in the parent and moved to
+  two different values by two branches is a `:merge_conflict`; a branch that leaves it at the
+  parent value does not conflict with one that changes it.
+
+### Thread-safety of handlers and aspects
+
+Parallel branches run on separate threads, and every branch dispatches through the **same handler
+map**. Handler lambdas, `around` wrappers, and anything they close over must therefore be
+thread-safe. The norm for collecting observations from an aspect is a `Thread::Queue`:
+
+```ruby
+timings = Thread::Queue.new # safe: Queue is thread-safe
+
+handlers = Berylx::EffectTree.around do |tag, payload, inner|
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  result = inner.call(payload)
+  timings << [tag, Process.clock_gettime(Process::CLOCK_MONOTONIC) - started]
+  result
+end
+```
+
+A plain shared `Array` is **not safe** — two branches appending concurrently can lose or interleave
+writes:
+
+```ruby
+timings = [] # unsafe: Array#<< is not atomic across threads
+handlers = Berylx::EffectTree.around do |tag, payload, inner|
+  result = inner.call(payload)
+  timings << [tag] # racy under parallel branches
+  result
+end
+```
+
+The same rule applies to effect handlers themselves (`db_query: ->(payload) { ... }`): if two
+parallel branches can perform the same effect, the handler body must tolerate concurrent calls.
+
 ```ruby
 left = Berylx::Task[:left] { |lay| lay[:status].set(:paid) }
 right = Berylx::Task[:right] { |lay| lay[:status].set(:trial) }
