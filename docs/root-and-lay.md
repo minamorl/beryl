@@ -105,9 +105,14 @@ The state a lay stores is **deeply frozen**:
   shared state. The same applies to values read inside `update` blocks.
 - A captured lay's `to_h` stays value-identical no matter what operations run later.
 
+The defensive copy is also a **normalization to plain hashes**: default values, default procs,
+`compare_by_identity`, and Hash-subclass behavior are not preserved. A default proc is a hash that
+mutates itself on read — fundamentally at odds with deep freezing — and strict `get` uses `fetch`,
+which never consults defaults anyway. State is plain nested data.
+
 Objects other than `Hash`/`Array`/`String` (models, `Data` instances) are stored as-is; their
-immutability is the caller's responsibility. The guarantee is pinned in
-`test/lay_lens_laws_test.rb`.
+immutability is the caller's responsibility. The guarantee and the normalization boundary are pinned
+in `test/lay_lens_laws_test.rb`.
 
 Task bodies should return the new lay:
 

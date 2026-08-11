@@ -17,8 +17,13 @@ module Berylx
       @path = path.freeze
     end
 
+    # 焦点の移動は凍結済みの @value をそのまま共有する。new を通すと
+    # Freeze.deep が木全体を再走査してしまうので、path だけ差し替える —
+    # 移動のコストは path 長に比例し、状態の大きさに比例しない。
     def [](key)
-      self.class.new(@value, @path + [key])
+      child = dup
+      child.refocus!(@path + [key])
+      child
     end
 
     def get(default: MISSING)
@@ -73,6 +78,12 @@ module Berylx
 
     def inspect
       "#<Berylx::Focus path=#{@path.inspect} value=#{get.inspect}>"
+    end
+
+    protected
+
+    def refocus!(path)
+      @path = path.freeze
     end
 
     private

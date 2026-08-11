@@ -11,6 +11,11 @@ module Berylx
   # 境界の線引き:
   #   - Hash / Array / String は凍結保証の対象。未凍結のものは複製して
   #     から凍結するので、呼び出し側の可変データを勝手に凍結しない。
+  #   - 複製は「平坦な Hash への正規化」でもある: default 値 / default proc /
+  #     compare_by_identity / Hash サブクラスの挙動は保存しない。default proc
+  #     は読み取りで自己変異する Hash であり深凍結と両立しないし、Focus#get は
+  #     元々 fetch なので default を尊重しない。状態は素の入れ子データに限る
+  #     (docs/root-and-lay.md に明記、test/lay_lens_laws_test.rb が pin)。
   #   - すでに深く凍結された部分木は同一オブジェクトのまま返す (再割当て
   #     しない) ので、set の経路コピーは構造共有を保つ。
   #   - それ以外のオブジェクト (Data、モデル等) には触れない。それらの

@@ -234,4 +234,24 @@ class LayLensLawsTest < Minitest::Test
     assert_equal 2, lay[:a][:b].set(2)[:a][:b].get
     assert_equal({ a: { b: 1 } }, lay.to_h)
   end
+
+  # 焦点の移動は凍結済みの木を同一オブジェクトのまま共有する — 移動の
+  # たびに Freeze.deep が木全体を再走査・再構築してはならない。
+  def test_navigation_shares_the_frozen_tree
+    lay = Berylx::Lay[user: { name: 'mina' }]
+
+    assert_same lay.to_h, lay[:user][:name].to_h
+  end
+
+  # 防御的コピーは「平坦な Hash への正規化」でもある: default 値 /
+  # default proc / compare_by_identity は保存しない。default proc は読み取りで
+  # 自己変異する Hash であり深凍結と両立しないため、状態は素の入れ子データに
+  # 限る、という境界を pin する。
+  def test_stored_hashes_are_normalized_to_plain_hashes
+    lay = Berylx::Lay[counts: Hash.new(0)]
+
+    assert_instance_of Hash, lay.to_h[:counts]
+    assert_nil lay.to_h[:counts][:missing] # default の 0 は保存されない
+    refute_predicate lay[:counts][:missing], :present?
+  end
 end
