@@ -55,9 +55,9 @@ result = lay[:account_id].required(:missing_account_id)
 
 A task catches `StandardError` and converts it into an `Err` while keeping the lay it received.
 Precisely: on a raised exception the partial lay is the lay **at task entry**. Lays built inside the
-task before the `raise` are ordinary local values — `set` returns a new lay, it does not advance
-any shared state — so they are lost with the stack. If progress must survive a failure, return it
-as part of an `Err` via `reject` instead of raising:
+task before the `raise` are ordinary local values — `set` returns a new lay, it does not advance any
+shared state — so they are lost with the stack. If progress must survive a failure, return it as
+part of an `Err` via `reject` instead of raising:
 
 ```ruby
 explode = Berylx::Task[:explode] do |_lay|
@@ -121,6 +121,32 @@ workflow =
 Only errors from the wrapped body reach that handler. Prefer this form for a deliberate compensation
 boundary; prefer `Catch` when recovery reads naturally as one stage in a pipeline.
 
+## Recovery runs in the effect tree
+
+Recovery is not applied outside the interpreter: when a rescue body (or a step before a `Catch`)
+fails, a `RECOVER` effect carrying `[node, error_result]` dispatches through the **current handler
+map**. Three things follow (all pinned in `test/recovery_effect_test.rb`):
+
+- **Aspects observe recovery.** An `EffectTree.around` aspect sees the rescue body, the `RECOVER`
+  dispatch itself, and the recovery handler's execution — a timing aspect measures compensation, an
+  audit aspect records it.
+- **Recovery bodies can perform effects.** A recovery `Task` runs as a subtree on the same handler
+  map, so a two-argument recovery task uses `io.perform` exactly like any other task. A recovery
+  **block** that takes a third argument receives a performer:
+
+  ```ruby
+  workflow = charge.rescue_with do |error, lay, io|
+    io.perform(:refund, lay[:charge_id].get)
+    lay[:refunded].set(true)
+  end
+  ```
+
+  Those effects dispatch through the current vocabulary — dry-run and audit handlers see them.
+
+- **Failed recovery keeps the original error.** If the handler itself returns `Err` — block or task
+  alike — the result is the handler's failure with the rescued error preserved in
+  `metadata[:rescued_error]`.
+
 ## Fatal errors
 
 Fatal failures bypass ordinary recovery:
@@ -151,6 +177,11 @@ workflow =
 ```
 
 Use fatal recovery sparingly; terminal errors are conservative by default.
+
+Note the asymmetry, pinned in `test/recovery_effect_test.rb`: `Catch` skips fatal errors unless
+built with `fatal: true`, while `rescue_with` recovers every failure of its explicit body — fatal
+included. Wrapping a body in `rescue_with` is already an explicit, scoped decision to handle its
+failures; `fatal:` exists to make the _positional_ boundary (`Catch`) opt in deliberately.
 
 ## Root behavior on failure
 

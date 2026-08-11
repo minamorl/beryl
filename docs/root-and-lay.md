@@ -88,6 +88,27 @@ The update operations are:
 - `update { |value| ... }` transforms the current value.
 - `put(key, value)` sets a child of the current focus.
 
+All three are **pure replacement** — they never merge the new value with the old one. (The only
+merging write in the gem is `Root#commit` with a plain Hash; see
+[Commit semantics](#commit-semantics).) Each returns a **new lay refocused at the root**: in the
+example above, `renamed` focuses the whole tree again, which is why the next step navigates
+`renamed[:user]` from the top. The lens laws — PutGet, GetPut, PutPut, stated with an explicit
+refocus — are pinned in `test/lay_lens_laws_test.rb`.
+
+## Immutability guarantee
+
+The state a lay stores is **deeply frozen**:
+
+- Construction takes a defensive copy of unfrozen `Hash`/`Array`/`String` nodes, so the caller's
+  data is never frozen in place and later mutation of the input never leaks into the lay.
+- `to_h` returns the frozen tree — mutating it raises `FrozenError` instead of silently corrupting
+  shared state. The same applies to values read inside `update` blocks.
+- A captured lay's `to_h` stays value-identical no matter what operations run later.
+
+Objects other than `Hash`/`Array`/`String` (models, `Data` instances) are stored as-is; their
+immutability is the caller's responsibility. The guarantee is pinned in
+`test/lay_lens_laws_test.rb`.
+
 Task bodies should return the new lay:
 
 ```ruby
@@ -98,8 +119,10 @@ end
 
 ## Lookup behavior
 
-`get` is strict and raises a normal Ruby lookup error for a missing path. Use an explicit helper
-when absence is expected:
+`get` is strict and raises a normal Ruby lookup error for a missing path. Key presence and value are
+distinct axes: `{}` and `{ k: nil }` are different states — `present?` and strict `get` distinguish
+them, and set/get round-trips never conflate them (pinned in `test/lay_lens_laws_test.rb`). Use an
+explicit helper when absence is expected:
 
 ```ruby
 lay[:user][:name].get
@@ -168,8 +191,9 @@ External observations can be committed explicitly:
 root.commit(user: { plan: 'pro' })
 ```
 
-Hash commits deep-merge into the current root. Committing a complete `Lay`, `Root`, `Ok`, or `Err`
-adopts that value's focus.
+Hash commits **deep-merge** into the current root — this is the only merging write in the gem
+(`Lay#set` and friends are pure replacement). Committing a complete `Lay`, `Root`, `Ok`, or `Err`
+adopts that value's focus — a replacement, not a merge.
 
 ## Subscribe to commits
 

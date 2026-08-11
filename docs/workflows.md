@@ -128,10 +128,10 @@ That determinism is what makes the merge policies meaningful:
 
 - `Merge.deep` is **right-biased and non-commutative** — on a scalar conflict the later-declared
   branch wins, deterministically. `left & right` and `right & left` are different workflows.
-- `Merge.strict` diffs both sides against the **common parent snapshot** (the lay the parallel
-  group started from), not mere key presence. A key initialized to `nil` in the parent and moved to
-  two different values by two branches is a `:merge_conflict`; a branch that leaves it at the
-  parent value does not conflict with one that changes it.
+- `Merge.strict` diffs both sides against the **common parent snapshot** (the lay the parallel group
+  started from), not mere key presence. A key initialized to `nil` in the parent and moved to two
+  different values by two branches is a `:merge_conflict`; a branch that leaves it at the parent
+  value does not conflict with one that changes it.
 
 ### Thread-safety of handlers and aspects
 
@@ -227,7 +227,7 @@ instrumentation without a second declarative DSL.
 | Receiver | `left \| right` | Meaning                                                                  |
 | -------- | --------------- | ------------------------------------------------------------------------ |
 | `Root`   | `root \| flow`  | Run `flow` from committed state and commit the result back into the root |
-| `State`  | `state \| flow` | Run `flow` from a standalone state (raw blocks are coerced into tasks)   |
+| `State`  | `state \| flow` | Run `flow` from a standalone state (`flow` must be a task/workflow node) |
 | `Ok`     | `ok \| node`    | Bind: pass the focus into `node.call` and continue                       |
 | `Err`    | `err \| node`   | Short-circuit: return the `Err` unchanged and ignore `node`              |
 | `Task`   | `task \| other` | Sequence, identical to `task >> other`                                   |
@@ -258,8 +258,8 @@ what reached it.
   `Err` arrives at its position, produced by any earlier step that no earlier boundary already
   recovered.
 - When the incoming result is `Ok`, the `Catch` is skipped entirely.
-- A fatal error skips the `Catch` unless it was built with `fatal: true`
-  (see [Errors and recovery](error-handling.md#fatal-errors)).
+- A fatal error skips the `Catch` unless it was built with `fatal: true` (see
+  [Errors and recovery](error-handling.md#fatal-errors)).
 - Standing alone (`catch.call(lay)`), a `Catch` is the identity — there is no preceding failure, so
   it passes the lay through as `Ok`.
 
@@ -268,6 +268,10 @@ reach a `Catch`: `(a >> catch) >> b` and `a >> (catch >> b)` normalize to the sa
 stays associative even with `Catch` in the chain (pinned in `test/category_laws_test.rb`). What
 changes scope is `rescue_with`, which binds recovery to an explicit body: only failures raised
 inside that body reach its handler.
+
+Recovery itself runs inside the effect tree: when a body fails, a `RECOVER` effect dispatches
+through the current handler map, so aspects observe it and recovery bodies can perform effects. See
+[Errors and recovery](error-handling.md#recovery-runs-in-the-effect-tree).
 
 Read [Errors and recovery](error-handling.md) for propagation, partial state, fatal errors, and
 handler behavior.
