@@ -135,9 +135,13 @@ class LayLensLawsTest < Minitest::Test
       first = gen_value(rng, 2)
       second = gen_value(rng, 2)
       twice = at(at(lay, path).set(first), path).set(second)
+      expected = at(lay, path).set(second).to_h
 
-      assert_equal at(lay, path).set(second).to_h, twice.to_h,
-                   "PutPut failed at #{path.inspect}"
+      if expected.nil? # root へ nil を set した退化ケース
+        assert_nil twice.to_h, "PutPut failed at #{path.inspect}"
+      else
+        assert_equal expected, twice.to_h, "PutPut failed at #{path.inspect}"
+      end
     end
   end
 

@@ -9,11 +9,18 @@ module Berylx
       @block = block
     end
 
-    def call(focus, error_result)
-      result = Result.normalize(@block.call(error_result.cause || error_result.error, focus))
+    # 3 引数のブロックは第三引数に Berylx::Perform を受け取り、回復の中から
+    # 作用を発行できる (Task の 2 引数形と同じ規則)。performer は RECOVER の
+    # real interpreter が「いま解釈に使っている handler マップ」から作る。
+    def call(focus, error_result, performer = nil)
+      result = Result.normalize(invoke(error_result, focus, performer))
       result.is_a?(Err) ? with_rescue_context(result) : result
     rescue StandardError => e
       Result.err(focus, e.class.name.to_sym, e.message, cause: e, failed_node: @name, trace: [@name])
+    end
+
+    def effectful?
+      @block.arity.abs >= 3
     end
 
     def nodes
@@ -21,6 +28,13 @@ module Berylx
     end
 
     private
+
+    def invoke(error_result, focus, performer)
+      error = error_result.cause || error_result.error
+      return @block.call(error, focus) unless effectful?
+
+      @block.call(error, focus, performer)
+    end
 
     def with_rescue_context(result)
       error = result.error.failed_node ? result.error : result.error.prepend_trace(@name)

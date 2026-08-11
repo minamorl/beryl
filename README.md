@@ -85,8 +85,9 @@ The payload is inspectable data: `[node, focus]`. Only the `TASK` tag carries a 
 combinator tags carry the `Parallel` / `Branch` / `Rescue` node itself.
 
 Wrapping `real_handlers` by hand does not propagate — the subtrees still run on the unwrapped map —
-so build aspects through `around`. Recovery handlers (`rescue_with`, `Catch`) are applied outside
-the effect tree, so an aspect observes the body of a rescue but not its recovery.
+so build aspects through `around`. Recovery (`rescue_with`, `Catch`) is itself an effect: when a
+body fails, a `RECOVER` effect is dispatched through the current handler map, so an aspect observes
+the body of a rescue, the recovery itself, and any effects performed inside the recovery.
 
 ## Quick start
 

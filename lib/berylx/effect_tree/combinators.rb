@@ -106,27 +106,43 @@ module Berylx
     end
 
     # ----------------------------------------------------------------
-    # Rescue — Rescue#call と同一セマンティクス。body を副木として実行し、
-    # Ok ならそのまま、Err なら回復 handler (RescueBlock / task) で差し替える。
+    # Rescue — body を副木として実行し、Ok ならそのまま、Err なら回復を
+    # RECOVER effect として現在の handler マップへ発行する。回復の適用は
+    # 木の外ではなくマップの中 (real_recover) で起きるので、around aspect は
+    # 回復も観測でき、回復の中の作用も同じ圏で解釈される。
     # ----------------------------------------------------------------
     def run_rescue(node, focus, handlers)
       result = run_subtree(node.body, focus, handlers)
       return result if result.is_a?(Ok)
 
-      recover(node.handler, result)
+      dispatch_recover(node, result, handlers)
     end
 
-    # 回復 handler の適用 — Rescue と Sequence 内の Catch 境界で共有する
-    # berylx 圏の algebra。RescueBlock (ブロック handler) はエラーと focus を
-    # 受け取り、それ以外の node handler は focus を受け取って結果封筒を返す。
-    # handler 自身が Err を返したら回復失敗として元エラーを metadata に畳む。
-    def recover(handler, error_result)
-      if handler.is_a?(RescueBlock)
-        handler.call(error_result.focus, error_result)
-      else
-        handler_result = handler.call(error_result.focus)
-        handler_result.is_a?(Err) ? rescue_failed(error_result, handler_result) : handler_result
-      end
+    # 回復を RECOVER effect として発行する。handlers が around の巻いた
+    # マップなら、この発行も wrapper を通る (= aspect が回復を観測する)。
+    def dispatch_recover(node, error_result, handlers)
+      Darkcore.fold(
+        Darkcore.op(RECOVER, [node, error_result]),
+        on_return: ->(x) { x }, handlers: handlers
+      )
+    end
+
+    # RECOVER の real interpreter — Rescue と Sequence 内の Catch 境界で共有
+    # する berylx 圏の algebra。RescueBlock (ブロック handler) はエラー・focus・
+    # performer を受け取り、node handler (Task など) は副木として同じ handler
+    # マップで実行される — 回復の中の io.perform も dry-run / audit から見える。
+    # handler 自身が Err を返したら回復失敗として元エラーを metadata に畳む
+    # (ブロックと node で同じ規則。docs/error-handling.md の契約)。
+    def real_recover(node, error_result, handlers)
+      recovery = node.handler
+      handler_result =
+        if recovery.is_a?(RescueBlock)
+          recovery.call(error_result.focus, error_result, Perform.new(handlers))
+        else
+          run_subtree(recovery, error_result.focus, handlers)
+        end
+
+      handler_result.is_a?(Err) ? rescue_failed(error_result, handler_result) : handler_result
     end
 
     def rescue_failed(original_result, handler_result)

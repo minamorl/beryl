@@ -179,13 +179,13 @@ class CategoryLawsTest < Minitest::Test
     assert_equal %i[sign], audit_names(branch, Berylx::Lay[n: 1])
   end
 
-  # Rescue は body だけが Effect 木のノードで、回復 handler は
-  # EffectTree.recover が木の外で直接適用する (Sequence の Catch も同じ)。
-  # aspect から見えるのは body まで、という境界をここで固定する。
-  def test_aspect_reaches_inside_rescue_body
+  # 回復は RECOVER effect として handler マップの中で適用されるので、
+  # aspect は rescue の body だけでなく回復 handler の実行にも届く
+  # (詳細な pin は test/recovery_effect_test.rb)。
+  def test_aspect_reaches_recovery_inside_rescue
     workflow = reject(:boom, :kaboom).rescue_with(set(:c, 3))
 
-    assert_equal %i[boom], audit_names(workflow)
+    assert_equal %i[boom c], audit_names(workflow)
   end
 
   # ================================================================
