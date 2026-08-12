@@ -36,6 +36,16 @@ jobs:
           repository: minamorl/darkcore-ruby
           path: darkcore-ruby
 
+      # spinel は test group だけの sibling path 依存
+      # (gem 'spinel', path: '../spinel')。ore-stack 条件 B の辺
+      # type_to_description を測る test/spinel_contract_test.rb が要求する。
+      # runtime 依存ではないが bundle install は解決しに行くので checkout が要る。
+      - name: Checkout spinel (test-only sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: minamorl/spinel
+          path: spinel
+
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
